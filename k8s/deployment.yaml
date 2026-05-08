@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-rest-api
+  namespace: default
+  labels:
+    app: todo-rest-api
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: todo-rest-api
+  template:
+    metadata:
+      labels:
+        app: todo-rest-api
+        version: v1
+    spec:
+      containers:
+      - name: todo-rest-api
+        image: gcr.io/PROJECT_ID/todo-rest-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
+          name: http
+          protocol: TCP
+        env:
+        - name: MYSQL_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: mysql-config
+              key: host
+        - name: MYSQL_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: mysql-config
+              key: port
+        - name: MYSQL_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: mysql-config
+              key: database
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: username
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: password
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /hello-world
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /hello-world
+            port: 5000
+          initialDelaySeconds: 15
+          periodSeconds: 5
+      restartPolicy: Always
