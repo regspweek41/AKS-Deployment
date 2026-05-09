@@ -45,6 +45,16 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Build Java application
+        run: |
+          cd backend-java
+          mvn clean package -DskipTests
+
+      - name: Verify build output
+        run: |
+          echo "Listing target folder..."
+          ls -R backend-java/target
+
       - name: Configure Docker to use gcloud as credential helper
         run: |
           gcloud auth configure-docker ${{ env.REGISTRY_HOSTNAME }}
