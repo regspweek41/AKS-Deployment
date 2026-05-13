@@ -63,7 +63,7 @@ jobs:
 
       - name: Build and push Docker image to GCR
         run: |
-          docker build -f backend-java/Dockerfile -t ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          docker build -f backend-java/Dockerfile -t ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
                        -t ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest backend-java
           docker push ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest
