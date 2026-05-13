@@ -25,7 +25,8 @@ env:
   GKE_ZONE: ${{ secrets.GKE_ZONE }}
   DEPLOYMENT_NAME: todo-rest-api
   IMAGE_NAME: todo-rest-api
-  REGISTRY_HOSTNAME: gcr.io
+  REGISTRY_HOSTNAME: us-west3-docker.pkg.dev
+  
 
 jobs:
   deploy:
