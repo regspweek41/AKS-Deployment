@@ -1,0 +1,111 @@
+name: Deploy to AKS
+
+on:
+  push:
+    branches:
+      - main
+      - feature/aks-pipeline
+    paths:
+      - 'k8s/**'
+      - 'backend-java/**'
+      - '.github/workflows/deploy-to-aks.yaml'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  AKS_CLUSTER: ${{ secrets.AKS_CLUSTER_NAME }}
+  ACR_NAME: ${{ secrets.ACR_NAME }}
+  DEPLOYMENT_NAME: todo-rest-api
+  IMAGE_NAME: todo-rest-api
+  NAMESPACE: default
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build Java application
+        run: |
+          cd backend-java
+          mvn clean package -DskipTests
+
+      - name: Verify build output
+        run: |
+          ls -R backend-java/target
+
+      - name: Login to ACR
+        run: |
+          az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and push Docker image to ACR
+        run: |
+          ACR_LOGIN_SERVER=$(az acr show \
+            --name ${{ env.ACR_NAME }} \
+            --query loginServer \
+            --output tsv)
+
+          IMAGE=$ACR_LOGIN_SERVER/${{ env.IMAGE_NAME }}
+
+          docker build -f backend-java/Dockerfile \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            backend-java
+
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.AKS_CLUSTER }} \
+            --overwrite-existing
+
+      - name: Update Kubernetes deployment image
+        run: |
+          kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
+            ${{ env.DEPLOYMENT_NAME }}=${{ env.IMAGE }}:${{ github.sha }} \
+            -n ${{ env.NAMESPACE }}
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.NAMESPACE }} \
+            --timeout=5m
+
+      - name: Check deployment and pods
+        run: |
+          kubectl get deployment ${{ env.DEPLOYMENT_NAME }} -n ${{ env.NAMESPACE }}
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=todo-rest-api
+          kubectl get svc -n ${{ env.NAMESPACE }}
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment to AKS successful!"
+            echo "Deployed image: ${{ env.IMAGE }}:${{ github.sha }}"
+          else
+            echo "❌ Deployment to AKS failed!"
+            exit 1
+          fi
