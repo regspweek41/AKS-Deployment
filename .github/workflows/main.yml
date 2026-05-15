@@ -51,6 +51,20 @@ jobs:
         run: |
           cd backend-java
           mvn clean package -DskipTests
+            
+      - name: SAST scan - Semgrep OSS
+        run: |
+          python -m pip install semgrep
+          semgrep scan \
+          --config p/java \
+          --config p/owasp-top-ten \
+          --config p/security-audit \
+          --error \
+          backend-java
+      - name: SCA scan - OWASP Dependency Check
+        run: |
+          cd backend-java
+          mvn org.owasp:dependency-check-maven:check -DskipTests
 
       - name: Verify build output
         run: |
@@ -67,6 +81,26 @@ jobs:
                        -t ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest backend-java
           docker push ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Generate SBOM - Syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.json
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with Cosign
+        run: |
+          cosign sign --yes ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
       - name: Get GKE credentials
         run: |
