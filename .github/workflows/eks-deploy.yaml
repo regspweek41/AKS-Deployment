@@ -1,0 +1,108 @@
+name: Deploy to EKS
+
+on:
+  push:
+    branches:
+      - main
+      - feature/eks-pipeline
+    paths:
+      - 'k8s/**'
+      - 'backend-java/**'
+      - '.github/workflows/deploy-to-eks.yaml'
+
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  EKS_CLUSTER: ${{ secrets.EKS_CLUSTER_NAME }}
+  ECR_REPOSITORY: todo-rest-api
+  DEPLOYMENT_NAME: todo-rest-api
+  IMAGE_NAME: todo-rest-api
+  NAMESPACE: default
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build Java application
+        run: |
+          cd backend-java
+          mvn clean package -DskipTests
+
+      - name: Verify build output
+        run: |
+          ls -R backend-java/target
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR repository if not exists
+        run: |
+          aws ecr describe-repositories \
+            --repository-names ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} || \
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --image-scanning-configuration scanOnPush=true \
+            --image-tag-mutability IMMUTABLE \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Build and push Docker image to ECR
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY=$AWS_ACCOUNT_ID.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+          IMAGE=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}
+
+          docker build -f backend-java/Dockerfile \
+            -t $IMAGE:${{ github.sha }} \
+            backend-java
+
+          docker push $IMAGE:${{ github.sha }}
+
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Get EKS credentials
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER }}
+
+      - name: Update Kubernetes deployment image
+        run: |
+          kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
+            ${{ env.DEPLOYMENT_NAME }}=${{ env.IMAGE }}:${{ github.sha }} \
+            -n ${{ env.NAMESPACE }}
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.NAMESPACE }} \
+            --timeout=5m
+
+      - name: Check deployment and pods
+        run: |
+          kubectl get deployment ${{ env.DEPLOYMENT_NAME }} -n ${{ env.NAMESPACE }}
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=todo-rest-api
+          kubectl get svc -n ${{ env.NAMESPACE }}
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment to EKS successful!"
+            echo "Deployed image: ${{ env.IMAGE }}:${{ github.sha }}"
+          else
+            echo "❌ Deployment to EKS failed!"
+            exit 1
+          fi
