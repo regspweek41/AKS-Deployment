@@ -60,6 +60,8 @@ jobs:
           --config p/owasp-top-ten \
           --config p/security-audit \
           --error \
+          --json \
+          --output semgrep-report.json \
           backend-java
       - name: SCA scan - OWASP Dependency Check
         run: |
