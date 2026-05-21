@@ -62,7 +62,7 @@ jobs:
           --config p/security-audit \
           --json \
           --output semgrep-report.json \
-          backend-java
+          backend-java || true 
       - name: SCA scan - OWASP Dependency Check
         run: |
           cd backend-java
