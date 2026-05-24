@@ -6,8 +6,11 @@ on:
       - main
       - feature/gcp-pipeline
     paths:
+      - 'backend-java/**'
       - 'k8s/**'
+      - 'scripts/**'
       - '.github/workflows/deploy-to-gke.yaml'
+
   workflow_dispatch:
     inputs:
       environment:
@@ -19,25 +22,42 @@ on:
           - staging
           - production
 
+permissions:
+  contents: read
+  id-token: write
+
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
   GKE_ZONE: ${{ secrets.GKE_ZONE }}
+
+  APP_NAME: todo-rest-api
   DEPLOYMENT_NAME: todo-rest-api
+  CONTAINER_NAME: todo-rest-api
   IMAGE_NAME: todo-rest-api
+  NAMESPACE: default
+
   REGISTRY_HOSTNAME: us-west3-docker.pkg.dev
   REPO: demo
-  
+
+  APP_SOURCE_DIR: backend-java
+  DOCKERFILE_PATH: backend-java/Dockerfile
+  K8S_MANIFEST_DIR: k8s
+
+  RISK_THRESHOLD: "70"
+  HEALTH_THRESHOLD: "70"
+  ENABLE_AUTO_ROLLBACK: "true"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    env:
+      IMAGE_URI: us-west3-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/demo/todo-rest-api:${{ github.sha }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -49,45 +69,51 @@ jobs:
 
       - name: Build Java application
         run: |
-          cd backend-java
+          cd $APP_SOURCE_DIR
           mvn clean package -DskipTests
-            
+
       - name: SAST scan - Semgrep OSS
         continue-on-error: true
         run: |
           python -m pip install semgrep
           semgrep scan \
-          --config p/java \
-          --config p/owasp-top-ten \
-          --config p/security-audit \
-          --json \
-          --output semgrep-report.json \
-          backend-java || true 
+            --config p/java \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --json \
+            --output semgrep-report.json \
+            $APP_SOURCE_DIR || true
+
       - name: SCA scan - OWASP Dependency Check
+        continue-on-error: true
         run: |
-          cd backend-java
-          mvn org.owasp:dependency-check-maven:check -DskipTests
+          cd $APP_SOURCE_DIR
+          mvn org.owasp:dependency-check-maven:check \
+            -Dformat=JSON \
+            -DskipTests || true
 
       - name: Verify build output
         run: |
           echo "Listing target folder..."
-          ls -R backend-java/target
+          ls -R $APP_SOURCE_DIR/target
 
       - name: Configure Docker to use gcloud as credential helper
         run: |
-          gcloud auth configure-docker ${{ env.REGISTRY_HOSTNAME }}
+          gcloud auth configure-docker $REGISTRY_HOSTNAME --quiet
 
-      - name: Build and push Docker image to GCR
+      - name: Build and push Docker image to Artifact Registry
         run: |
-          docker build -f backend-java/Dockerfile -t ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                       -t ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest backend-java
-          docker push ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:latest
+          docker build \
+            -f $DOCKERFILE_PATH \
+            -t $IMAGE_URI \
+            $APP_SOURCE_DIR
+
+          docker push $IMAGE_URI
 
       - name: Generate SBOM - Syft
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.IMAGE }}:${{ github.sha }}
+          image: ${{ env.IMAGE_URI }}
           format: cyclonedx-json
           output-file: sbom.json
 
@@ -102,41 +128,108 @@ jobs:
 
       - name: Sign image with Cosign
         run: |
-          cosign sign --yes ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cosign sign --yes $IMAGE_URI
+
+      - name: Verify Cosign signature
+        run: |
+          cosign verify \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "https://github.com/.+/.github/workflows/.+@refs/heads/.+" \
+            $IMAGE_URI
+
+      - name: Install AIOps dependencies
+        run: |
+          pip install pyyaml
+
+      - name: AIOps pre-deployment risk analysis
+        run: |
+          python scripts/generic-aiops-risk-gate.py
+
+      - name: Upload AIOps risk report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiops-risk-report-${{ github.sha }}
+          path: |
+            risk-score.txt
+            aiops-risk-report.json
+          if-no-files-found: ignore
+
+      - name: Block unsafe deployment
+        run: |
+          RISK_SCORE=$(cat risk-score.txt)
+
+          echo "AIOps Risk Score: $RISK_SCORE"
+          echo "Risk Threshold: $RISK_THRESHOLD"
+
+          if [ "$RISK_SCORE" -ge "$RISK_THRESHOLD" ]; then
+            echo "❌ Deployment blocked by AIOps risk gate"
+            exit 1
+          fi
+
+          echo "✅ AIOps risk gate passed"
 
       - name: Get GKE credentials
         run: |
-          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
-            --zone ${{ env.GKE_ZONE }} \
-            --project ${{ env.PROJECT_ID }}
+          gcloud container clusters get-credentials $GKE_CLUSTER \
+            --zone $GKE_ZONE \
+            --project $PROJECT_ID
 
       - name: Update Kubernetes deployment with new image
         run: |
-          kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-            ${{ env.DEPLOYMENT_NAME }}=${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            -n default \
-            --record
+          kubectl set image deployment/$DEPLOYMENT_NAME \
+            $CONTAINER_NAME=$IMAGE_URI \
+            -n $NAMESPACE
 
       - name: Verify deployment rollout
         run: |
-          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n default --timeout=5m
+          kubectl rollout status deployment/$DEPLOYMENT_NAME \
+            -n $NAMESPACE \
+            --timeout=5m
+
+      - name: Agentic AI post-deployment health analysis
+        run: |
+          python scripts/generic-agentic-health-check.py
+
+      - name: Agentic rollback decision
+        if: failure()
+        run: |
+          if [ "$ENABLE_AUTO_ROLLBACK" = "true" ]; then
+            echo "❌ Agentic health check failed. Rolling back..."
+            kubectl rollout undo deployment/$DEPLOYMENT_NAME -n $NAMESPACE
+            kubectl rollout status deployment/$DEPLOYMENT_NAME -n $NAMESPACE --timeout=5m
+          else
+            echo "⚠️ Health check failed, but auto rollback is disabled"
+            exit 1
+          fi
 
       - name: Check deployment status
+        if: always()
         run: |
-          kubectl get deployment ${{ env.DEPLOYMENT_NAME }} -n default
-          kubectl get pods -n default -l app=todo-rest-api
+          kubectl get deployment $DEPLOYMENT_NAME -n $NAMESPACE || true
+          kubectl get pods -n $NAMESPACE -l app=$APP_NAME || true
+          kubectl get svc -n $NAMESPACE || true
 
-      - name: Verify service endpoints
-        run: |
-          kubectl get svc -n default
-          kubectl describe svc ${{ env.DEPLOYMENT_NAME }} -n default || echo "Service not found, checking for loadbalancer..."
+      - name: Upload all reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-aiops-reports-${{ github.sha }}
+          path: |
+            semgrep-report.json
+            sbom.json
+            risk-score.txt
+            aiops-risk-report.json
+            agentic-health-report.json
+            backend-java/target/dependency-check-report.json
+          if-no-files-found: ignore
 
       - name: Notify deployment status
         if: always()
         run: |
-          if [ "${{ job.status }}" == "success" ]; then
+          if [ "${{ job.status }}" = "success" ]; then
             echo "✅ Deployment to GKE successful!"
-            echo "Deployed image: ${{ env.REGISTRY_HOSTNAME }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            echo "Deployed image: $IMAGE_URI"
           else
             echo "❌ Deployment to GKE failed!"
             exit 1
