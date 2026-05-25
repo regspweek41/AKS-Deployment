@@ -139,11 +139,56 @@ jobs:
 
       - name: Install AIOps dependencies
         run: |
-          pip install pyyaml
+          python -m pip install --upgrade pip
+          pip install pyyaml requests
+
+      - name: Validate Kubernetes manifests
+        run: |
+          echo "Validating Kubernetes YAML files..."
+
+          if [ ! -d "$K8S_MANIFEST_DIR" ]; then
+            echo "❌ Kubernetes manifest directory not found: $K8S_MANIFEST_DIR"
+            exit 1
+          fi
+
+          find $K8S_MANIFEST_DIR -name "*.yaml" -o -name "*.yml"
+
+          echo "✅ Kubernetes manifest files detected"
 
       - name: AIOps pre-deployment risk analysis
+        env:
+          RISK_THRESHOLD: ${{ env.RISK_THRESHOLD }}
+          K8S_MANIFEST_DIR: ${{ env.K8S_MANIFEST_DIR }}
         run: |
+          echo "======================================="
+          echo "Running Enterprise AIOps Risk Analysis"
+          echo "======================================="
+
           python scripts/generic-aiops-risk-gate.py
+
+      - name: Display AIOps risk analysis
+        if: always()
+        run: |
+          echo "======================================="
+          echo "AIOps Risk Analysis Report"
+          echo "======================================="
+
+          if [ -f risk-score.txt ]; then
+            echo "Risk Score:"
+            cat risk-score.txt
+          else
+            echo "❌ risk-score.txt missing"
+          fi
+
+          echo ""
+          echo "Detailed Report:"
+          echo "---------------------------------------"
+
+          if [ -f aiops-risk-report.json ]; then
+            cat aiops-risk-report.json
+          else
+            echo "❌ aiops-risk-report.json missing"
+          fi
 
       - name: Upload AIOps risk report
         if: always()
@@ -157,6 +202,16 @@ jobs:
 
       - name: Block unsafe deployment
         run: |
+          echo "======================================="
+          echo "Enterprise AIOps Deployment Gate"
+          echo "======================================="
+
+          if [ ! -f risk-score.txt ]; then
+            echo "❌ risk-score.txt not found"
+            echo "Blocking deployment due to missing risk analysis"
+            exit 1
+          fi
+
           RISK_SCORE=$(cat risk-score.txt)
 
           echo "AIOps Risk Score: $RISK_SCORE"
