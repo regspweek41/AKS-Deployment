@@ -24,7 +24,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -126,19 +125,33 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign image with Cosign
+      - name: Sign image with Cosign key pair
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
-          cosign sign --yes $IMAGE_URI
+          echo "$COSIGN_PRIVATE_KEY" > cosign.key
 
-      - name: Verify Cosign signature
-        run: |
-          cosign verify \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            --certificate-identity-regexp "https://github.com/.+/.github/workflows/.+@refs/heads/.+" \
+          cosign sign \
+            --key cosign.key \
+            --yes \
             $IMAGE_URI
 
-      - name: Install AIOps dependencies
+      - name: Verify Cosign signature
+        env:
+          COSIGN_PUBLIC_KEY: ${{ secrets.COSIGN_PUBLIC_KEY }}
         run: |
+<<<<<<< HEAD
+=======
+          echo "$COSIGN_PUBLIC_KEY" > cosign.pub
+
+          cosign verify \
+            --key cosign.pub \
+            $IMAGE_URI
+
+      - name: Install AIOps and Agentic AI dependencies
+        run: |
+>>>>>>> 6a86797 (agentic ai usecase added)
           python -m pip install --upgrade pip
           pip install pyyaml requests
 
@@ -243,8 +256,38 @@ jobs:
             --timeout=5m
 
       - name: Agentic AI post-deployment health analysis
+        env:
+          APP_NAME: ${{ env.APP_NAME }}
+          DEPLOYMENT_NAME: ${{ env.DEPLOYMENT_NAME }}
+          NAMESPACE: ${{ env.NAMESPACE }}
+          HEALTH_THRESHOLD: ${{ env.HEALTH_THRESHOLD }}
         run: |
+          echo "======================================="
+          echo "Running Agentic AI Health Analysis"
+          echo "======================================="
+
           python scripts/generic-agentic-health-check.py
+
+      - name: Display Agentic AI health report
+        if: always()
+        run: |
+          echo "======================================="
+          echo "Agentic AI Health Report"
+          echo "======================================="
+
+          if [ -f agentic-health-report.json ]; then
+            cat agentic-health-report.json
+          else
+            echo "⚠️ agentic-health-report.json not found"
+          fi
+
+      - name: Upload Agentic AI health report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-health-report-${{ github.sha }}
+          path: agentic-health-report.json
+          if-no-files-found: ignore
 
       - name: Agentic rollback decision
         if: failure()
