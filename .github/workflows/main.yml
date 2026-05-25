@@ -141,8 +141,6 @@ jobs:
         env:
           COSIGN_PUBLIC_KEY: ${{ secrets.COSIGN_PUBLIC_KEY }}
         run: |
-<<<<<<< HEAD
-=======
           echo "$COSIGN_PUBLIC_KEY" > cosign.pub
 
           cosign verify \
@@ -151,7 +149,6 @@ jobs:
 
       - name: Install AIOps and Agentic AI dependencies
         run: |
->>>>>>> 6a86797 (agentic ai usecase added)
           python -m pip install --upgrade pip
           pip install pyyaml requests
 
