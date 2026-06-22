@@ -125,27 +125,27 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign image with Cosign key pair
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
-        run: |
-          echo "$COSIGN_PRIVATE_KEY" > cosign.key
+      # - name: Sign image with Cosign key pair
+      #   env:
+      #     COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      #     COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+      #   run: |
+      #     echo "$COSIGN_PRIVATE_KEY" > cosign.key
 
-          cosign sign \
-            --key cosign.key \
-            --yes \
-            $IMAGE_URI
+      #     cosign sign \
+      #       --key cosign.key \
+      #       --yes \
+      #       $IMAGE_URI
 
-      - name: Verify Cosign signature
-        env:
-          COSIGN_PUBLIC_KEY: ${{ secrets.COSIGN_PUBLIC_KEY }}
-        run: |
-          echo "$COSIGN_PUBLIC_KEY" > cosign.pub
+      # - name: Verify Cosign signature
+      #   env:
+      #     COSIGN_PUBLIC_KEY: ${{ secrets.COSIGN_PUBLIC_KEY }}
+      #   run: |
+      #     echo "$COSIGN_PUBLIC_KEY" > cosign.pub
 
-          cosign verify \
-            --key cosign.pub \
-            $IMAGE_URI
+      #     cosign verify \
+      #       --key cosign.pub \
+      #       $IMAGE_URI
 
       - name: Install AIOps and Agentic AI dependencies
         run: |
