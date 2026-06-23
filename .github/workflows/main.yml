@@ -41,7 +41,7 @@ env:
 
   APP_SOURCE_DIR: backend-java
   DOCKERFILE_PATH: backend-java/Dockerfile
-  K8S_MANIFEST_DIR: k8s
+  K8S_MANIFEST_DIR: backend-java
 
   RISK_THRESHOLD: "70"
   HEALTH_THRESHOLD: "70"
